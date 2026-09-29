@@ -108,6 +108,20 @@ namespace Catch {
         return std::any_of( m_filters.begin(), m_filters.end(), [&]( Filter const& f ){ return f.matches( testCase ); } );
     }
 
+    bool TestSpec::isExplicitlyExcluded( TestCaseInfo const& testCase ) const {
+        return std::any_of(
+            m_filters.begin(),
+            m_filters.end(),
+            [&]( Filter const& filter ) {
+                return std::any_of(
+                    filter.m_forbidden.begin(),
+                    filter.m_forbidden.end(),
+                    [&]( Detail::unique_ptr<Pattern> const& pattern ) {
+                        return pattern->matches( testCase );
+                    } );
+            } );
+    }
+
     TestSpec::Matches TestSpec::matchesByFilter( std::vector<TestCaseHandle> const& testCases, IConfig const& config ) const {
         Matches matches;
         matches.reserve( m_filters.size() );

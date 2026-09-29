@@ -26,6 +26,7 @@ Once you're up and running consider the following reference material.
 **Running:**
 * [Command line reference](command-line.md#top)
 * [Running specific section/generator](filtering-execution-path.md#top)
+* [Test dependencies and execution planning](test-dependencies.md#top)
 
 **Odds and ends:**
 * [Frequently Asked Questions (FAQ)](faq.md#top)

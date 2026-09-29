@@ -59,6 +59,7 @@ set(IMPL_HEADERS
   ${SOURCES_DIR}/catch_template_test_macros.hpp
   ${SOURCES_DIR}/catch_test_case_info.hpp
   ${SOURCES_DIR}/catch_test_macros.hpp
+  ${SOURCES_DIR}/catch_test_plan.hpp
   ${SOURCES_DIR}/catch_test_run_info.hpp
   ${SOURCES_DIR}/catch_test_spec.hpp
   ${SOURCES_DIR}/catch_timer.hpp
@@ -166,6 +167,7 @@ set(IMPL_SOURCES
   ${SOURCES_DIR}/catch_session.cpp
   ${SOURCES_DIR}/catch_tag_alias_autoregistrar.cpp
   ${SOURCES_DIR}/catch_test_case_info.cpp
+  ${SOURCES_DIR}/catch_test_plan.cpp
   ${SOURCES_DIR}/catch_test_spec.cpp
   ${SOURCES_DIR}/catch_timer.cpp
   ${SOURCES_DIR}/catch_tostring.cpp

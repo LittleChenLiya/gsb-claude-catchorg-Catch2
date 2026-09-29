@@ -7,7 +7,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 //  Catch v3.16.0
-//  Generated: 2026-08-25 09:29:23.172704
+//  Generated: 2026-09-30 02:06:15.108095
 //  ----------------------------------------------------------
 //  This file is an amalgamation of multiple different files.
 //  You probably shouldn't edit it directly.
@@ -1252,7 +1252,6 @@ namespace Catch {
 #include <cstdlib>
 #include <exception>
 #include <iomanip>
-#include <set>
 
 namespace Catch {
 
@@ -1307,24 +1306,32 @@ namespace Catch {
                 assert( m_config->testSpec().getInvalidSpecs().empty() &&
                         "Invalid test specs should be handled before running tests" );
 
+                // Note that we are working with pointers into this vector
+                // of sorted test cases, so sorting/unique-ing the pointers
+                // keeps the user-specified order.
                 auto const& allTestCases = getAllTestCasesSorted(*m_config);
                 auto const& testSpec = m_config->testSpec();
+                m_tests.reserve( allTestCases.size() );
                 if ( !testSpec.hasFilters() ) {
                     for ( auto const& test : allTestCases ) {
                         if ( !test.getTestCaseInfo().isHidden() ) {
-                            m_tests.emplace( &test );
+                            m_tests.push_back( &test );
                         }
                     }
                 } else {
-                    m_matches =
-                        testSpec.matchesByFilter( allTestCases, *m_config );
+                    m_matches = testSpec.matchesByFilter( allTestCases, *m_config );
                     for ( auto const& match : m_matches ) {
-                        m_tests.insert( match.tests.begin(),
+                        m_tests.insert( m_tests.end(),
+                                        match.tests.begin(),
                                         match.tests.end() );
                     }
+                    std::sort( m_tests.begin(), m_tests.end() );
+                    m_tests.erase(
+                        std::unique( m_tests.begin(), m_tests.end() ),
+                        m_tests.end() );
                 }
 
-                m_tests = createShard(m_tests, m_config->shardCount(), m_config->shardIndex());
+                m_tests = createShard(CATCH_MOVE(m_tests), m_config->shardCount(), m_config->shardIndex());
             }
 
             Totals execute() {
@@ -1355,7 +1362,7 @@ namespace Catch {
             IEventListener* m_reporter;
             Config const* m_config;
             RunContext m_context;
-            std::set<TestCaseHandle const*> m_tests;
+            std::vector<TestCaseHandle const*> m_tests;
             TestSpec::Matches m_matches;
             bool m_unmatchedTestSpecs = false;
         };
@@ -1668,6 +1675,7 @@ namespace Catch {
 #include <cassert>
 #include <cctype>
 #include <algorithm>
+#include <utility>
 
 namespace Catch {
 
@@ -1701,32 +1709,27 @@ namespace Catch {
             return tcp != TestCaseProperties::None;
         }
 
-        TestCaseProperties parseSpecialTag( StringRef tag ) {
-            if( !tag.empty() && tag[0] == '.' )
-                return TestCaseProperties::IsHidden;
-            else if( tag == "!throws"_sr )
-                return TestCaseProperties::Throws;
-            else if( tag == "!shouldfail"_sr )
-                return TestCaseProperties::ShouldFail;
-            else if( tag == "!mayfail"_sr )
-                return TestCaseProperties::MayFail;
-            else if( tag == "!nonportable"_sr )
-                return TestCaseProperties::NonPortable;
-            else if( tag == "!benchmark"_sr )
-                return TestCaseProperties::Benchmark | TestCaseProperties::IsHidden;
-            else
-                return TestCaseProperties::None;
-        }
-        bool isReservedTag( StringRef tag ) {
-            return parseSpecialTag( tag ) == TestCaseProperties::None
-                && tag.size() > 0
-                && !std::isalnum( static_cast<unsigned char>(tag[0]) );
-        }
-        void enforceNotReservedTag( StringRef tag, SourceLineInfo const& _lineInfo ) {
-            CATCH_ENFORCE( !isReservedTag(tag),
-                          "Tag name: [" << tag << "] is not allowed.\n"
-                          << "Tag names starting with non alphanumeric characters are reserved\n"
-                          << _lineInfo );
+        TestCaseProperties propertiesFromTag( StringRef tag, SourceLineInfo const& _lineInfo ) {
+            if ( tag.empty() ) { return TestCaseProperties::None; }
+            // All tags starting with alphanumeric characters are normal.
+            if ( std::isalnum( tag[0] ) ) { return TestCaseProperties::None; }
+
+            // Explicitly check known special tags, and error out if it is not one of them
+            if ( tag[0] == '.' ) { return TestCaseProperties::IsHidden; }
+            else if ( tag == "!throws"_sr ) { return TestCaseProperties::Throws; }
+            else if ( tag == "!shouldfail"_sr ) { return TestCaseProperties::ShouldFail; }
+            else if ( tag == "!mayfail"_sr ) { return TestCaseProperties::MayFail; }
+            else if ( tag == "!nonportable"_sr ) { return TestCaseProperties::NonPortable; }
+            else if ( tag == "!benchmark"_sr ) {
+                return TestCaseProperties::Benchmark |
+                       TestCaseProperties::IsHidden;
+            } else {
+                CATCH_RUNTIME_ERROR(
+                    "Tag name: [" << tag << "] is not allowed.\n"
+                                  << "Tag names starting with non-alphanumeric "
+                                     "characters are reserved.\n"
+                                  << _lineInfo );
+            }
         }
 
         std::string makeDefaultName() {
@@ -1788,6 +1791,18 @@ namespace Catch {
         auto requiredSize = originalTags.size() + sizeOfExtraTags(_lineInfo.file);
         backingTags.reserve(requiredSize);
 
+        // Since there is usually only small number of tags on a test case,
+        // the geometric growth on vector does not get time to properly
+        // amortize the reallocations. But we can save a lot of time by
+        // pre-allocating space for all tags.
+        if ( !originalTags.empty() ) {
+            size_t tagCount = 1; // 1 for filename tag
+            for ( size_t i = 0; i < originalTags.size(); ++i ) {
+                if ( originalTags[i] == '[' ) { ++tagCount; }
+            }
+            tags.reserve( tagCount );
+        }
+
         // We cannot copy the tags directly, as we need to normalize
         // some tags, so that [.foo] is copied as [.][foo].
         size_t tagStart = 0;
@@ -1823,8 +1838,7 @@ namespace Catch {
                                    << _nameAndTags.name << "' at "
                                    << _lineInfo );
 
-                enforceNotReservedTag(tagStr, lineInfo);
-                properties |= parseSpecialTag(tagStr);
+                properties |= propertiesFromTag(tagStr, _lineInfo);
                 // When copying a tag to the backing storage, we need to
                 // check if it is a merged hide tag, such as [.foo], and
                 // if it is, we need to handle it as if it was [foo].
@@ -1847,10 +1861,21 @@ namespace Catch {
             internalAppendTag("."_sr);
         }
 
-        // Sort and prepare tags
-        std::sort(begin(tags), end(tags));
-        tags.erase(std::unique(begin(tags), end(tags)),
-                   end(tags));
+        // Tests usually have small number of tags, so we explicitly handle
+        // the 1 and 2 tags cases for better performance in low-opt builds.
+        switch ( tags.size() ) {
+        case 1:
+            break;
+        case 2:
+            if ( tags[0] == tags[1] ) { tags.pop_back(); }
+            else if ( tags[1] < tags[0] ) { std::swap( tags[0], tags[1] ); }
+            break;
+        default:
+            std::sort( begin( tags ), end( tags ) );
+            tags.erase( std::unique( begin( tags ), end( tags ) ),
+                        end( tags ) );
+        }
+
     }
 
     bool TestCaseInfo::isHidden() const {
@@ -1913,7 +1938,223 @@ namespace Catch {
         return lhs.tags < rhs.tags;
     }
 
+    bool operator==( TestCaseInfo const& lhs, TestCaseInfo const& rhs ) {
+        return lhs.name == rhs.name
+            && lhs.className == rhs.className
+            && lhs.tags == rhs.tags;
+    }
+
 } // end namespace Catch
+
+
+
+
+#include <algorithm>
+#include <map>
+#include <set>
+
+namespace Catch {
+
+    namespace {
+        std::vector<TestDependency>& dependencyStore() {
+            static std::vector<TestDependency> store;
+            return store;
+        }
+    } // end unnamed namespace
+
+    void registerTestDependency( StringRef dependent, StringRef prerequisite ) {
+        dependencyStore().push_back(
+            { static_cast<std::string>( dependent ),
+              static_cast<std::string>( prerequisite ) } );
+    }
+
+    std::vector<TestDependency> const& getRegisteredTestDependencies() {
+        return dependencyStore();
+    }
+
+    TestDependencyAutoReg::TestDependencyAutoReg( StringRef dependent,
+                                                  StringRef prerequisite ) {
+        registerTestDependency( dependent, prerequisite );
+    }
+
+    TestPlan planTestRun( std::vector<TestCaseInfo const*> const& allTests,
+                          TestSpec const& testSpec,
+                          std::vector<TestDependency> const& dependencies ) {
+        TestPlan plan;
+
+        // Index all known tests by name, keeping declaration order
+        std::map<std::string, std::vector<TestCaseInfo const*>> testsByName;
+        for ( auto const* test : allTests ) {
+            testsByName[test->name].push_back( test );
+        }
+
+        // Drop duplicated declarations, e.g. from a dependency registered
+        // in a header included into multiple TUs
+        std::vector<TestDependency> uniqueDependencies;
+        for ( auto const& dep : dependencies ) {
+            const auto it = std::find_if(
+                uniqueDependencies.begin(),
+                uniqueDependencies.end(),
+                [&]( TestDependency const& kept ) {
+                    return kept.dependent == dep.dependent &&
+                           kept.prerequisite == dep.prerequisite;
+                } );
+            if ( it == uniqueDependencies.end() ) {
+                uniqueDependencies.push_back( dep );
+            }
+        }
+
+        // Validate the declarations. A dependency has to unambiguously
+        // refer to registered test cases, and must not be trivially cyclic.
+        for ( auto const& dep : uniqueDependencies ) {
+            if ( dep.dependent == dep.prerequisite ) {
+                ReusableStringStream rss;
+                rss << "Test case '" << dep.dependent
+                    << "' depends on itself";
+                plan.errors.push_back( rss.str() );
+                continue;
+            }
+            for ( auto const& name : { dep.dependent, dep.prerequisite } ) {
+                const auto it = testsByName.find( name );
+                if ( it == testsByName.end() ) {
+                    ReusableStringStream rss;
+                    rss << "Test dependency refers to unknown test case '"
+                        << name << '\'';
+                    plan.errors.push_back( rss.str() );
+                } else if ( it->second.size() > 1 ) {
+                    ReusableStringStream rss;
+                    rss << "Test dependency refers to ambiguous test case '"
+                        << name << "': " << it->second.size()
+                        << " test cases share this name";
+                    plan.errors.push_back( rss.str() );
+                }
+            }
+        }
+        if ( !plan.errors.empty() ) {
+            return plan;
+        }
+
+        // Adjacency lookup: test -> its prerequisites
+        std::map<TestCaseInfo const*, std::vector<TestCaseInfo const*>>
+            prerequisites;
+        for ( auto const& dep : uniqueDependencies ) {
+            prerequisites[testsByName[dep.dependent].front()].push_back(
+                testsByName[dep.prerequisite].front() );
+        }
+
+        // The initial selection mirrors what filtering with the test spec
+        // would select: with no filters all non-hidden tests are selected,
+        // otherwise the tests matching the spec's filters.
+        std::vector<TestCaseInfo const*> selected;
+        for ( auto const* test : allTests ) {
+            if ( testSpec.hasFilters() ? testSpec.matches( *test )
+                                       : !test->isHidden() ) {
+                selected.push_back( test );
+            }
+        }
+
+        // Close the selection over the declared dependencies. Required
+        // prerequisites are pulled in even if they are hidden, but a
+        // prerequisite that the test spec explicitly excludes is a
+        // conflict and is reported instead of being silently added back.
+        std::set<TestCaseInfo const*> inPlan( selected.begin(),
+                                              selected.end() );
+        std::vector<TestCaseInfo const*> worklist = selected;
+        while ( !worklist.empty() ) {
+            auto const* test = worklist.back();
+            worklist.pop_back();
+            const auto it = prerequisites.find( test );
+            if ( it == prerequisites.end() ) {
+                continue;
+            }
+            for ( auto const* prerequisite : it->second ) {
+                if ( inPlan.count( prerequisite ) != 0 ) {
+                    continue;
+                }
+                if ( testSpec.isExplicitlyExcluded( *prerequisite ) ) {
+                    ReusableStringStream rss;
+                    rss << "Test case '" << test->name << "' requires '"
+                        << prerequisite->name
+                        << "', but it is excluded by the test spec";
+                    plan.errors.push_back( rss.str() );
+                    continue;
+                }
+                inPlan.insert( prerequisite );
+                worklist.push_back( prerequisite );
+            }
+        }
+        if ( !plan.errors.empty() ) {
+            return plan;
+        }
+
+        // Layer the planned tests so that every test's prerequisites are
+        // in strictly earlier layers. Tests within a layer keep their
+        // relative order from allTests, keeping the plan stable.
+        std::set<TestCaseInfo const*> placed;
+        std::vector<TestCaseInfo const*> remaining;
+        for ( auto const* test : allTests ) {
+            if ( inPlan.count( test ) != 0 ) {
+                remaining.push_back( test );
+            }
+        }
+        while ( !remaining.empty() ) {
+            std::vector<TestCaseInfo const*> layer;
+            std::vector<TestCaseInfo const*> notReady;
+            for ( auto const* test : remaining ) {
+                bool ready = true;
+                const auto it = prerequisites.find( test );
+                if ( it != prerequisites.end() ) {
+                    for ( auto const* prerequisite : it->second ) {
+                        if ( inPlan.count( prerequisite ) != 0 &&
+                             placed.count( prerequisite ) == 0 ) {
+                            ready = false;
+                            break;
+                        }
+                    }
+                }
+                ( ready ? layer : notReady ).push_back( test );
+            }
+            if ( layer.empty() ) {
+                std::vector<std::string> names;
+                names.reserve( notReady.size() );
+                for ( auto const* test : notReady ) {
+                    names.push_back( test->name );
+                }
+                std::sort( names.begin(), names.end() );
+                names.erase(
+                    std::unique( names.begin(), names.end() ),
+                    names.end() );
+                ReusableStringStream rss;
+                rss << "Dependency cycle detected between test cases: ";
+                bool first = true;
+                for ( auto const& name : names ) {
+                    if ( !first ) {
+                        rss << ", ";
+                    }
+                    rss << '\'' << name << '\'';
+                    first = false;
+                }
+                plan.errors.push_back( rss.str() );
+                plan.layers.clear();
+                return plan;
+            }
+            for ( auto const* test : layer ) {
+                placed.insert( test );
+            }
+            plan.layers.push_back( CATCH_MOVE( layer ) );
+            remaining = CATCH_MOVE( notReady );
+        }
+
+        return plan;
+    }
+
+    TestPlan planTestRun( std::vector<TestCaseInfo const*> const& allTests,
+                          TestSpec const& testSpec ) {
+        return planTestRun(
+            allTests, testSpec, getRegisteredTestDependencies() );
+    }
+
+} // namespace Catch
 
 
 
@@ -1937,7 +2178,7 @@ namespace Catch {
 
     TestSpec::NamePattern::NamePattern( std::string const& name, std::string const& filterString )
     : Pattern( filterString )
-    , m_wildcardPattern( toLower( name ), CaseSensitive::No )
+    , m_wildcardPattern( name, CaseSensitive::No )
     {}
 
     bool TestSpec::NamePattern::matches( TestCaseInfo const& testCase ) const {
@@ -2013,17 +2254,33 @@ namespace Catch {
         return std::any_of( m_filters.begin(), m_filters.end(), [&]( Filter const& f ){ return f.matches( testCase ); } );
     }
 
+    bool TestSpec::isExplicitlyExcluded( TestCaseInfo const& testCase ) const {
+        return std::any_of(
+            m_filters.begin(),
+            m_filters.end(),
+            [&]( Filter const& filter ) {
+                return std::any_of(
+                    filter.m_forbidden.begin(),
+                    filter.m_forbidden.end(),
+                    [&]( Detail::unique_ptr<Pattern> const& pattern ) {
+                        return pattern->matches( testCase );
+                    } );
+            } );
+    }
+
     TestSpec::Matches TestSpec::matchesByFilter( std::vector<TestCaseHandle> const& testCases, IConfig const& config ) const {
         Matches matches;
         matches.reserve( m_filters.size() );
         for ( auto const& filter : m_filters ) {
             std::vector<TestCaseHandle const*> currentMatches;
-            for ( auto const& test : testCases )
+            for ( auto const& test : testCases ) {
                 if ( isThrowSafe( test, config ) &&
-                     filter.matches( test.getTestCaseInfo() ) )
+                     filter.matches( test.getTestCaseInfo() ) ) {
                     currentMatches.emplace_back( &test );
-            matches.push_back(
-                FilterMatch{ extractFilterName( filter ), currentMatches } );
+                }
+            }
+            matches.push_back( FilterMatch{ extractFilterName( filter ),
+                                            CATCH_MOVE( currentMatches ) } );
         }
         return matches;
     }
@@ -7082,7 +7339,6 @@ namespace Catch {
 
 #include <ostream>
 #include <cstring>
-#include <cctype>
 #include <vector>
 
 namespace Catch {
@@ -7111,9 +7367,6 @@ namespace Catch {
         std::string lc = s;
         toLowerInPlace( lc );
         return lc;
-    }
-    char toLower(char c) {
-        return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
 
     std::string trim( std::string const& str ) {
@@ -7327,7 +7580,6 @@ namespace Catch {
 
 
 #include <algorithm>
-#include <set>
 
 namespace Catch {
 
@@ -7337,23 +7589,39 @@ namespace Catch {
 
         static void enforceNoDuplicateTestCases(
             std::vector<TestCaseHandle> const& tests ) {
-            auto testInfoCmp = []( TestCaseInfo const* lhs,
-                                   TestCaseInfo const* rhs ) {
-                return *lhs < *rhs;
-            };
-            std::set<TestCaseInfo const*, decltype( testInfoCmp )&> seenTests(
-                testInfoCmp );
+            // Flat set instead of std::set for performance.
+            std::vector<TestCaseInfo const*> seenTests;
+            seenTests.reserve( tests.size() );
             for ( auto const& test : tests ) {
-                const auto infoPtr = &test.getTestCaseInfo();
-                const auto prev = seenTests.insert( infoPtr );
-                CATCH_ENFORCE( prev.second,
-                               "error: test case \""
-                                   << infoPtr->name << "\", with tags \""
-                                   << infoPtr->tagsAsString()
-                                   << "\" already defined.\n"
-                                   << "\tFirst seen at "
-                                   << ( *prev.first )->lineInfo << "\n"
-                                   << "\tRedefined at " << infoPtr->lineInfo );
+                seenTests.push_back( &test.getTestCaseInfo() );
+            }
+            // We want to keep order of ~equal~ tests
+            // stable_sort so that duplicates are reported with the
+            // registration order preserved ("first seen" really is first)
+            std::stable_sort(
+                seenTests.begin(),
+                seenTests.end(),
+                []( TestCaseInfo const* lhs, TestCaseInfo const* rhs ) {
+                    return *lhs < *rhs;
+                }
+            );
+            const auto duplicate = std::adjacent_find(
+                seenTests.begin(),
+                seenTests.end(),
+                []( TestCaseInfo const* lhs, TestCaseInfo const* rhs ) {
+                    return *lhs == *rhs;
+                }
+            );
+
+            if ( duplicate != seenTests.end() ) {
+                const auto infoPtr = *std::next( duplicate );
+                CATCH_ERROR( "error: test case \""
+                             << infoPtr->name << "\", with tags \""
+                             << infoPtr->tagsAsString()
+                             << "\" already defined.\n"
+                             << "\tFirst seen at "
+                             << ( *duplicate )->lineInfo << "\n"
+                             << "\tRedefined at " << infoPtr->lineInfo );
             }
         }
 
@@ -7430,7 +7698,7 @@ namespace Catch {
                 filtered.push_back(testCase);
             }
         }
-        return createShard(filtered, config.shardCount(), config.shardIndex());
+        return createShard(CATCH_MOVE(filtered), config.shardCount(), config.shardIndex());
     }
     std::vector<TestCaseHandle> const& getAllTestCasesSorted( IConfig const& config ) {
         return getRegistryHub().getTestCaseRegistry().getAllTestsSorted( config );
@@ -7634,7 +7902,7 @@ namespace TestCaseTracking {
 
     bool SectionTracker::isFilteredImpl() const {
         // TBD: This is currently _very_ similar to the block in `isComplete`.
-        //      Is this neccessarily that way, or just accident of current semantics?
+        //      Is this necessarily that way, or just accident of current semantics?
         const size_t filterIndex =
             m_newStyleFilters ? m_allTrackerDepth : m_sectionOnlyDepth;
 
@@ -7809,6 +8077,15 @@ namespace Catch {
     Detail::unique_ptr<ITestInvoker> makeTestInvoker( void(*testAsFunction)() ) {
         return Detail::make_unique<TestInvokerAsFunction>( testAsFunction );
     }
+
+    AutoReg::AutoReg( void ( *testAsFunction )(),
+                      SourceLineInfo const& lineInfo,
+                      StringRef classOrMethod,
+                      NameAndTags const& nameAndTags ) noexcept:
+        AutoReg( makeTestInvoker( testAsFunction ),
+                 lineInfo,
+                 classOrMethod,
+                 nameAndTags ) {}
 
     AutoReg::AutoReg( Detail::unique_ptr<ITestInvoker> invoker, SourceLineInfo const& lineInfo, StringRef classOrMethod, NameAndTags const& nameAndTags ) noexcept {
         CATCH_TRY {
@@ -8087,6 +8364,15 @@ namespace {
 namespace Catch {
     namespace TextFlow {
         void AnsiSkippingString::preprocessString() {
+            // If there are no potential escapes, we can use fast path
+            if ( m_string.find( '\033' ) == std::string::npos ) {
+                size_t size = 0;
+                for ( const char c : m_string ) {
+                    size += !isUtf8ContinuationByte( c );
+                }
+                m_size = size;
+                return;
+            }
             for ( auto it = m_string.begin(); it != m_string.end(); ) {
                 // try to read through an ansi sequence
                 while ( it != m_string.end() && *it == '\033' &&
@@ -8099,8 +8385,10 @@ namespace Catch {
                     if ( cursor == m_string.end() || *cursor != 'm' ) {
                         break;
                     }
-                    // 'm' -> 0xff
-                    *cursor = AnsiSkippingString::sentinel;
+                    // record the escape sequence's byte range
+                    m_escapes.push_back(
+                        { std::distance( m_string.begin(), it ),
+                          std::distance( m_string.begin(), cursor + 1 ) } );
                     // if we've read an ansi sequence, set the iterator and
                     // return to the top of the loop
                     it = cursor + 1;
@@ -8128,79 +8416,102 @@ namespace Catch {
         }
 
         AnsiSkippingString::const_iterator AnsiSkippingString::begin() const {
-            return const_iterator( m_string );
+            return const_iterator( *this );
         }
 
         AnsiSkippingString::const_iterator AnsiSkippingString::end() const {
-            return const_iterator( m_string, const_iterator::EndTag{} );
+            return const_iterator( *this, const_iterator::EndTag{} );
         }
 
-        std::string AnsiSkippingString::substring( const_iterator begin,
-                                                   const_iterator end ) const {
+        std::string AnsiSkippingString::substring( const_iterator first,
+                                                   const_iterator last ) const {
+            std::string ret;
+            appendSubstringTo( ret, first, last );
+            return ret;
+        }
+
+        void
+        AnsiSkippingString::appendSubstringTo( std::string& out,
+                                               const_iterator first,
+                                               const_iterator last ) const {
             // There's one caveat here to an otherwise simple substring: when
             // making a begin iterator we might have skipped ansi sequences at
-            // the start. If `begin` here is a begin iterator, skipped over
+            // the start. If `first` here is a begin iterator, skipped over
             // initial ansi sequences, we'll use the true beginning of the
-            // string. Lastly: We need to transform any chars we replaced with
-            // 0xff back to 'm'
-            auto str = std::string( begin == this->begin() ? m_string.begin()
-                                                           : begin.m_it,
-                                    end.m_it );
-            std::transform( str.begin(), str.end(), str.begin(), []( char c ) {
-                return c == AnsiSkippingString::sentinel ? 'm' : c;
-            } );
-            return str;
-        }
-
-        void AnsiSkippingString::const_iterator::tryParseAnsiEscapes() {
-            // check if we've landed on an ansi sequence, and if so read through
-            // it
-            while ( m_it != m_string->end() && *m_it == '\033' &&
-                    m_it + 1 != m_string->end() &&  *( m_it + 1 ) == '[' ) {
-                auto cursor = m_it + 2;
-                while ( cursor != m_string->end() &&
-                        ( isdigit( *cursor ) || *cursor == ';' ) ) {
-                    ++cursor;
-                }
-                if ( cursor == m_string->end() ||
-                     *cursor != AnsiSkippingString::sentinel ) {
-                    break;
-                }
-                // if we've read an ansi sequence, set the iterator and
-                // return to the top of the loop
-                m_it = cursor + 1;
+            // string.
+            if ( hasEscapes() && first == begin() ) {
+                out.append( m_string.begin(), last.m_it );
+            } else {
+                out.append( first.m_it, last.m_it );
             }
         }
 
+        void AnsiSkippingString::const_iterator::jumpForwardOverEscapes() {
+            // Escapes can only start with '\033'
+            if ( m_it == m_string->m_string.end() || *m_it != '\033' ) {
+                return;
+            }
+            // If we are at '\033', check if we are at an actual escape
+            auto current_pos = std::distance( m_string->m_string.begin(), m_it );
+
+            auto const& escapes = m_string->m_escapes;
+            auto candidate =
+                std::lower_bound( escapes.begin(),
+                                  escapes.end(),
+                                  current_pos,
+                                  []( AnsiSkippingString::EscapeRange const& r,
+                                      std::ptrdiff_t o ) { return r.start < o; } );
+            // Escapes can be consecutive, we need to jump over all of them
+            while ( candidate != escapes.end() && candidate->start == current_pos ) {
+                current_pos = candidate->end;
+                ++candidate;
+            }
+            m_it = m_string->m_string.begin() + current_pos;
+        }
+
+        void AnsiSkippingString::const_iterator::jumpBackOverEscapes() {
+            auto strBegin = m_string->m_string.begin();
+            // Escapes only end with 'm'
+            while ( *m_it == 'm' ) {
+                // If we are at 'm', check if we are at an actual escape
+                const auto current_pos = std::distance( strBegin, m_it );
+
+                auto const& escapes = m_string->m_escapes;
+                auto range = std::lower_bound(
+                    escapes.begin(),
+                    escapes.end(),
+                    current_pos + 1, // to half-open range
+                    []( AnsiSkippingString::EscapeRange const& r,
+                        std::ptrdiff_t o ) { return r.end < o; } );
+                if ( range == escapes.end() || range->end != current_pos + 1 ) {
+                    break;
+                }
+                assert( range->start != 0 &&
+                        "Trying to go back with begin iterator" );
+                m_it = strBegin + range->start - 1;
+            }
+        }
+
+
         void AnsiSkippingString::const_iterator::advance() {
-            assert( m_it != m_string->end() );
+            auto strEnd = m_string->m_string.end();
+            assert( m_it != strEnd );
             m_it++;
             // Skip UTF-8 continuation bytes
-            while ( m_it != m_string->end() &&
+            while ( m_it != strEnd &&
                     isUtf8ContinuationByte( *m_it ) ) {
                 m_it++;
             }
-            tryParseAnsiEscapes();
+            if ( m_string->hasEscapes() ) { jumpForwardOverEscapes(); }
         }
 
         void AnsiSkippingString::const_iterator::unadvance() {
-            assert( m_it != m_string->begin() );
+            auto strBegin = m_string->m_string.begin();
+            assert( m_it != strBegin );
             m_it--;
-            // if *m_it is 0xff, scan back to the \033 and then m_it-- once more
-            // (and repeat check)
-            while ( *m_it == AnsiSkippingString::sentinel ) {
-                while ( *m_it != '\033' ) {
-                    assert( m_it != m_string->begin() );
-                    m_it--;
-                }
-                // if this happens, we must have been a begin iterator that had
-                // skipped over ansi sequences at the start of a string
-                assert( m_it != m_string->begin() );
-                assert( *m_it == '\033' );
-                m_it--;
-            }
+            if ( m_string->hasEscapes() ) { jumpBackOverEscapes(); }
             // Skip back over UTF-8 continuation bytes to the leading byte
-            while ( m_it != m_string->begin() &&
+            while ( m_it != strBegin &&
                     isUtf8ContinuationByte( *m_it ) ) {
                 m_it--;
             }
@@ -8278,10 +8589,8 @@ namespace Catch {
             AnsiSkippingString::const_iterator end ) const {
             std::string ret;
             const auto desired_indent = indentSize();
-            // ret.reserve( desired_indent + (end - start) + m_addHyphen );
             ret.append( desired_indent, ' ' );
-            // ret.append( start, end );
-            ret += m_column.m_string.substring( start, end );
+            m_column.m_string.appendSubstringTo( ret, start, end );
             if ( m_addHyphen ) { ret.push_back( '-' ); }
 
             return ret;
@@ -8473,35 +8782,53 @@ namespace Catch {
     WildcardPattern::WildcardPattern( std::string const& pattern,
                                       CaseSensitive caseSensitivity )
     :   m_caseSensitivity( caseSensitivity ),
-        m_pattern( normaliseString( pattern ) )
+        m_pattern( trim(pattern) )
     {
         if( startsWith( m_pattern, '*' ) ) {
-            m_pattern = m_pattern.substr( 1 );
-            m_wildcard = WildcardAtStart;
+            m_pattern = m_pattern.erase( 0, 1 ); // effectively pop_front
+            m_wildcard = static_cast<WildcardPosition>( m_wildcard | WildcardAtStart );
         }
         if( endsWith( m_pattern, '*' ) ) {
-            m_pattern = m_pattern.substr( 0, m_pattern.size()-1 );
+            m_pattern.pop_back();
             m_wildcard = static_cast<WildcardPosition>( m_wildcard | WildcardAtEnd );
         }
     }
 
-    bool WildcardPattern::matches( std::string const& str ) const {
-        switch( m_wildcard ) {
-            case NoWildcard:
-                return m_pattern == normaliseString( str );
-            case WildcardAtStart:
-                return endsWith( normaliseString( str ), m_pattern );
-            case WildcardAtEnd:
-                return startsWith( normaliseString( str ), m_pattern );
-            case WildcardAtBothEnds:
-                return contains( normaliseString( str ), m_pattern );
-            default:
-                CATCH_INTERNAL_ERROR( "Unknown enum" );
-        }
-    }
+    bool WildcardPattern::matches( StringRef input ) const {
+        input = trim( input );
+        if ( input.size() < m_pattern.size() ) { return false; }
 
-    std::string WildcardPattern::normaliseString( std::string const& str ) const {
-        return trim( m_caseSensitivity == CaseSensitive::No ? toLower( str ) : str );
+        auto casedMatch = [&]( StringRef lhs, StringRef rhs ) {
+            if ( m_caseSensitivity == CaseSensitive::Yes ) {
+                return lhs == rhs;
+            } else {
+                Detail::CaseInsensitiveEqualTo eq;
+                return eq( lhs, rhs );
+            }
+        };
+
+        switch ( m_wildcard ) {
+        case NoWildcard:
+            return casedMatch(input, m_pattern);
+        case WildcardAtStart:
+            return casedMatch(
+                input.substr( input.size() - m_pattern.size(), input.size() ),
+                m_pattern );
+        case WildcardAtEnd:
+            return casedMatch( input.substr( 0, m_pattern.size() ), m_pattern );
+        case WildcardAtBothEnds: {
+            // TBD: This has terrible performance, but it is also the least
+            //      common use case. Once the StringContains matcher gets
+            //      efficient implementation, we should reuse it here.
+            const size_t lastOffset = input.size() - m_pattern.size();
+            for ( size_t offset = 0; offset <= lastOffset; ++offset ) {
+                if ( casedMatch( input.substr(offset, m_pattern.size()), m_pattern ) ) { return true; }
+            }
+            return false;
+        }
+        default:
+            CATCH_INTERNAL_ERROR( "Unknown enum" );
+        }
     }
 }
 
@@ -10366,7 +10693,7 @@ namespace Catch {
         if ( m_sectionStack.empty() ) {
             if ( !m_rootSection ) {
                 m_rootSection =
-                    Detail::make_unique<SectionNode>( incompleteStats );
+                    Detail::make_unique<SectionNode>( CATCH_MOVE( incompleteStats ) );
             }
             node = m_rootSection.get();
         } else {
@@ -10376,7 +10703,7 @@ namespace Catch {
                                     BySectionInfo( sectionInfo ) );
             if ( it == parentNode.childSections.end() ) {
                 auto newNode =
-                    Detail::make_unique<SectionNode>( incompleteStats );
+                    Detail::make_unique<SectionNode>( CATCH_MOVE( incompleteStats ) );
                 node = newNode.get();
                 parentNode.childSections.push_back( CATCH_MOVE( newNode ) );
             } else {
@@ -10756,7 +11083,7 @@ namespace Catch {
                     row.insert( 0, m_width - row.size(), ' ' );
                 }
                 m_width = new_width;
-                m_rows.push_back( row );
+                m_rows.push_back( CATCH_MOVE( row ) );
                 return std::move( *this );
             }
 

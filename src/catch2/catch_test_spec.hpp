@@ -93,6 +93,9 @@ namespace Catch {
 
         bool hasFilters() const;
         bool matches( TestCaseInfo const& testCase ) const;
+        //! Returns true if the test case matches a forbidden (excluded)
+        //! pattern in any of this spec's filters
+        bool isExplicitlyExcluded( TestCaseInfo const& testCase ) const;
         Matches matchesByFilter( std::vector<TestCaseHandle> const& testCases, IConfig const& config ) const;
         const vectorStrings & getInvalidSpecs() const;
 

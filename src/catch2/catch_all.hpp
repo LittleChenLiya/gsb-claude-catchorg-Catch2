@@ -37,6 +37,7 @@
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_case_info.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_test_plan.hpp>
 #include <catch2/catch_test_run_info.hpp>
 #include <catch2/catch_test_spec.hpp>
 #include <catch2/catch_timer.hpp>
