@@ -105,6 +105,7 @@
 #include <catch2/internal/catch_reusable_string_stream.hpp>
 #include <catch2/internal/catch_run_context.hpp>
 #include <catch2/internal/catch_section.hpp>
+#include <catch2/internal/catch_shard_plan.hpp>
 #include <catch2/internal/catch_sharding.hpp>
 #include <catch2/internal/catch_singletons.hpp>
 #include <catch2/internal/catch_source_line_info.hpp>

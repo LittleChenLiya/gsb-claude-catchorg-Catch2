@@ -10,6 +10,7 @@
 #include <catch2/internal/catch_parse_numbers.hpp>
 #include <catch2/internal/catch_string_manip.hpp>
 
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 
@@ -45,6 +46,35 @@ namespace Catch {
         }
         CATCH_CATCH_ANON( std::out_of_range const& ) {
             // the input does not fit into an unsigned long long
+        }
+        return {};
+    }
+
+    Optional<double> parseDouble(std::string const& input) {
+        auto trimmed = trim( input );
+        if ( trimmed.empty() ) {
+            return {};
+        }
+
+        CATCH_TRY {
+            size_t pos = 0;
+            const auto ret = std::stod( trimmed, &pos );
+
+            // We did not consume the whole input, so there is an issue
+            if ( pos != trimmed.size() ) {
+                return {};
+            }
+            // Non-finite values (inf, nan) are not accepted
+            if ( !std::isfinite( ret ) ) {
+                return {};
+            }
+            return ret;
+        }
+        CATCH_CATCH_ANON( std::invalid_argument const& ) {
+            // no conversion could be performed
+        }
+        CATCH_CATCH_ANON( std::out_of_range const& ) {
+            // the input does not fit into a double
         }
         return {};
     }

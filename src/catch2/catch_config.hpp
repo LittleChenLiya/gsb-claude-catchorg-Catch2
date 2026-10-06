@@ -68,6 +68,17 @@ namespace Catch {
         unsigned int shardCount = 1;
         unsigned int shardIndex = 0;
 
+        // Plan-only sharding mode: instead of running tests, the tests
+        // are split into `shardCount` shards based on their historical
+        // durations, and the resulting plan is printed out.
+        bool shardPlan = false;
+        // File with historical test durations, used to balance the shards
+        // in plan-only sharding mode. Empty means no history is available.
+        std::string shardTimingsFile;
+        // Duration assumed for tests missing from the timings file.
+        // Keep in sync with Catch::kDefaultShardPlanTestDuration.
+        double shardDefaultDuration = 1.0;
+
         bool skipBenchmarks = false;
         bool benchmarkNoAnalysis = false;
         unsigned int benchmarkSamples = 100;

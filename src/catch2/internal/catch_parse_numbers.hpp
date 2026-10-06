@@ -21,6 +21,15 @@ namespace Catch {
      * e.g. "-1" is rejected, instead of being parsed as UINT_MAX.
      */
     Optional<unsigned int> parseUInt(std::string const& input, int base = 10);
+
+    /**
+     * Parses a finite double from the input
+     *
+     * Effectively a wrapper around std::stod but with better error checking,
+     * e.g. the whole input has to be consumed, and non-finite values such
+     * as "inf" or "nan" are rejected.
+     */
+    Optional<double> parseDouble(std::string const& input);
 }
 
 #endif // CATCH_PARSE_NUMBERS_HPP_INCLUDED

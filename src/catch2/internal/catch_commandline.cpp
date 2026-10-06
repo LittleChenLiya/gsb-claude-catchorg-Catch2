@@ -219,6 +219,17 @@ namespace Catch {
             return ParserResult::ok( ParseResultType::Matched );
         };
 
+        auto const setShardDefaultDuration = [&]( std::string const& duration ) {
+            auto parsedDuration = parseDouble( duration );
+            if ( !parsedDuration || *parsedDuration < 0 ) {
+                return ParserResult::runtimeError(
+                    "Could not parse '" + duration +
+                    "' as a non-negative duration" );
+            }
+            config.shardDefaultDuration = *parsedDuration;
+            return ParserResult::ok( ParseResultType::Matched );
+        };
+
         auto const setSectionFilter = [&]( std::string const& sectionFilter ) {
             config.pathFilters.emplace_back( PathFilter::For::Section, trim(sectionFilter) );
             return ParserResult::ok( ParseResultType::Matched );
@@ -364,6 +375,15 @@ namespace Catch {
             | Opt( setShardIndex, "shard index" )
                 ["--shard-index"]
                 ( "index of the group of tests to execute (see --shard-count)" )
+            | Opt( config.shardPlan )
+                ["--shard-plan"]
+                ( "print the shard plan (see --shard-count) without running the tests" )
+            | Opt( config.shardTimingsFile, "filename" )
+                ["--shard-timings"]
+                ( "file with historical test durations used to balance the shard plan" )
+            | Opt( setShardDefaultDuration, "seconds" )
+                ["--shard-default-duration"]
+                ( "duration assumed for tests missing from the shard timings file" )
             | Opt( config.allowZeroTests )
                 ["--allow-running-no-tests"]
                 ( "Treat 'No tests run' as a success" )

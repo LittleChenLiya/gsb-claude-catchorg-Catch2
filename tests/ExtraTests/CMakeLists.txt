@@ -52,6 +52,36 @@ foreach(shardOrder decl lex)
   )
 endforeach()
 
+add_test(
+  NAME TestSharding::ShardPlan
+  COMMAND $<TARGET_FILE:SelfTest> --shard-plan --shard-count 3
+)
+set_tests_properties(TestSharding::ShardPlan
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "Shard plan: [0-9]+ test\\(s\\) split into 3 shard\\(s\\)"
+    # The shard plan does not depend on the test order, so the random
+    # order sharding warning must not be printed in plan mode.
+    FAIL_REGULAR_EXPRESSION "${CATCH_SHARDING_WARNING_REGEX}"
+)
+
+add_test(
+  NAME TestSharding::ShardPlanAppliesTestSpec
+  COMMAND $<TARGET_FILE:SelfTest> --shard-plan --shard-count 2 "[generators]"
+)
+set_tests_properties(TestSharding::ShardPlanAppliesTestSpec
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "Shard plan: [0-9]+ test\\(s\\) split into 2 shard\\(s\\)"
+)
+
+add_test(
+  NAME TestSharding::ShardPlanMissingTimingsFile
+  COMMAND $<TARGET_FILE:SelfTest> --shard-plan --shard-count 2 --shard-timings "this-file-should-not-exist.timings"
+)
+set_tests_properties(TestSharding::ShardPlanMissingTimingsFile
+  PROPERTIES
+    PASS_REGULAR_EXPRESSION "Could not open the shard timings file"
+)
+
 # The MinDuration reporting tests do not need separate compilation, but
 # they have non-trivial execution time, so they are categorized as
 # extra tests, so that they are run less.

@@ -15,6 +15,7 @@
 #include <catch2/catch_version.hpp>
 #include <catch2/internal/catch_startup_exception_registry.hpp>
 #include <catch2/internal/catch_sharding.hpp>
+#include <catch2/internal/catch_shard_plan.hpp>
 #include <catch2/internal/catch_test_case_registry_impl.hpp>
 #include <catch2/internal/catch_textflow.hpp>
 #include <catch2/internal/catch_windows_h_proxy.hpp>
@@ -26,10 +27,12 @@
 #include <catch2/internal/catch_stdstreams.hpp>
 #include <catch2/internal/catch_istream.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <iomanip>
 
 namespace Catch {
@@ -148,6 +151,73 @@ namespace Catch {
 
         void applyFilenamesAsTags() {
             getMutableRegistryHub().getMutableTestCaseRegistry().enableFilenameTags();
+        }
+
+        // Collects the tests that would be run for the given configuration,
+        // using the same filtering rules as a normal test run (hidden tests
+        // are skipped unless the test spec explicitly selects them, etc).
+        std::vector<TestCaseHandle const*>
+        collectMatchingTests( Config const& config ) {
+            auto const& allTestCases = getAllTestCasesSorted( config );
+            auto const& testSpec = config.testSpec();
+            std::vector<TestCaseHandle const*> tests;
+            tests.reserve( allTestCases.size() );
+            if ( !testSpec.hasFilters() ) {
+                for ( auto const& test : allTestCases ) {
+                    if ( !test.getTestCaseInfo().isHidden() ) {
+                        tests.push_back( &test );
+                    }
+                }
+            } else {
+                auto const matches =
+                    testSpec.matchesByFilter( allTestCases, config );
+                for ( auto const& match : matches ) {
+                    tests.insert( tests.end(),
+                                  match.tests.begin(),
+                                  match.tests.end() );
+                }
+                std::sort( tests.begin(), tests.end() );
+                tests.erase( std::unique( tests.begin(), tests.end() ),
+                             tests.end() );
+            }
+            return tests;
+        }
+
+        // Implements the plan-only sharding mode: instead of running the
+        // tests, the tests matching the test spec are split into
+        // `--shard-count` shards based on their historical durations, and
+        // the resulting plan is printed out.
+        int outputShardPlan( Config const& config,
+                             ConfigData const& configData ) {
+            auto const tests = collectMatchingTests( config );
+
+            TestTimingMap timings;
+            if ( !configData.shardTimingsFile.empty() ) {
+                std::ifstream timingsFile( configData.shardTimingsFile.c_str() );
+                CATCH_ENFORCE( timingsFile.is_open(),
+                               "Could not open the shard timings file '"
+                                   << configData.shardTimingsFile << "'" );
+                timings = parseTestTimings( timingsFile );
+            }
+
+            auto const shards = createShardPlan( tests,
+                                                 timings,
+                                                 configData.shardCount,
+                                                 configData.shardDefaultDuration );
+
+            auto& out = Catch::cout();
+            out << "Shard plan: " << tests.size() << " test(s) split into "
+                << shards.size() << " shard(s)\n";
+            for ( std::size_t i = 0; i < shards.size(); ++i ) {
+                out << "shard " << i << ": " << shards[i].tests.size()
+                    << " test(s), expected duration "
+                    << shards[i].totalDuration << " s\n";
+                for ( auto const* test : shards[i].tests ) {
+                    out << "  " << test->getTestCaseInfo().name << '\n';
+                }
+            }
+            out << std::flush;
+            return 0;
         }
 
         // Creates empty file at path. The path must be writable, we do not
@@ -353,7 +423,8 @@ namespace Catch {
         CATCH_TRY {
             config(); // Force config to be constructed
 
-            if ( m_config->shardCount() > 1 &&
+            if ( !m_configData.shardPlan &&
+                 m_config->shardCount() > 1 &&
                  m_config->runOrder() == TestRunOrder::Randomized &&
                  !m_config->rngSeedWasFixed() ) {
                 Catch::cerr()
@@ -394,6 +465,11 @@ namespace Catch {
             // Handle list request
             if (list(*reporter, *m_config)) {
                 return 0;
+            }
+
+            // Handle shard plan request
+            if ( m_configData.shardPlan ) {
+                return outputShardPlan( *m_config, m_configData );
             }
 
             TestGroup tests { CATCH_MOVE(reporter), m_config.get() };
