@@ -16,6 +16,7 @@
 #include <catch2/internal/catch_stringref.hpp>
 #include <catch2/internal/catch_random_seed_generation.hpp>
 #include <catch2/internal/catch_reporter_spec_parser.hpp>
+#include <catch2/internal/catch_shard_plan.hpp>
 
 #include <chrono>
 #include <map>
@@ -67,6 +68,10 @@ namespace Catch {
 
         unsigned int shardCount = 1;
         unsigned int shardIndex = 0;
+
+        bool shardPlan = false;
+        std::string shardDurationsFile;
+        double shardDefaultDuration = defaultShardTestDuration;
 
         bool skipBenchmarks = false;
         bool benchmarkNoAnalysis = false;

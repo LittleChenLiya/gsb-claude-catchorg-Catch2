@@ -14,6 +14,7 @@
 #include <catch2/catch_test_spec.hpp>
 #include <catch2/catch_version.hpp>
 #include <catch2/internal/catch_startup_exception_registry.hpp>
+#include <catch2/internal/catch_shard_plan.hpp>
 #include <catch2/internal/catch_sharding.hpp>
 #include <catch2/internal/catch_test_case_registry_impl.hpp>
 #include <catch2/internal/catch_textflow.hpp>
@@ -30,11 +31,38 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <iomanip>
 
 namespace Catch {
 
     namespace {
+        // Plan-only sharding mode: instead of running tests, distribute the
+        // tests matching the test spec into `--shard-count` shards based on
+        // their historical durations and print out the resulting plan.
+        int runShardPlanMode( Config const& config, ConfigData const& configData ) {
+            ShardDurationMap durations;
+            if ( !configData.shardDurationsFile.empty() ) {
+                std::ifstream durationsFile( configData.shardDurationsFile );
+                if ( !durationsFile ) {
+                    Catch::cerr()
+                        << "Could not open shard durations file '"
+                        << configData.shardDurationsFile << "'\n"
+                        << std::flush;
+                    return UnspecifiedErrorExitCode;
+                }
+                durations = parseShardDurations( durationsFile );
+            }
+
+            auto const tests = filterTestsForShardPlan( config );
+            auto const planTests = makeShardPlanTests( tests, durations );
+            auto const shards = createShardPlan( planTests,
+                                                 configData.shardCount,
+                                                 configData.shardDefaultDuration );
+            printShardPlan( Catch::cout(), tests, shards );
+            return 0;
+        }
+
         IEventListenerPtr createReporter(std::string const& reporterName, ReporterConfig&& config) {
             auto reporter = Catch::getRegistryHub().getReporterRegistry().create(reporterName, CATCH_MOVE(config));
             CATCH_ENFORCE(reporter, "No reporter registered with name: '" << reporterName << '\'');
@@ -354,6 +382,7 @@ namespace Catch {
             config(); // Force config to be constructed
 
             if ( m_config->shardCount() > 1 &&
+                 !m_configData.shardPlan &&
                  m_config->runOrder() == TestRunOrder::Randomized &&
                  !m_config->rngSeedWasFixed() ) {
                 Catch::cerr()
@@ -394,6 +423,11 @@ namespace Catch {
             // Handle list request
             if (list(*reporter, *m_config)) {
                 return 0;
+            }
+
+            // Handle shard plan request
+            if ( m_configData.shardPlan ) {
+                return runShardPlanMode( *m_config, m_configData );
             }
 
             TestGroup tests { CATCH_MOVE(reporter), m_config.get() };

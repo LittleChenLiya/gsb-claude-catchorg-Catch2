@@ -30,6 +30,7 @@
 [Filenames as tags](#filenames-as-tags)<br>
 [Override output colouring](#override-output-colouring)<br>
 [Test Sharding](#test-sharding)<br>
+[Duration-based shard planning](#duration-based-shard-planning)<br>
 [Allow running the binary without tests](#allow-running-the-binary-without-tests)<br>
 [Output verbosity](#output-verbosity)<br>
 [Create file to guard against silent early termination](#create-file-to-guard-against-silent-early-termination)<br>
@@ -76,6 +77,9 @@ Click one of the following links to take you straight to that option - or scroll
 <a href="#colour-mode">                                 `    --colour-mode`</a><br />
 <a href="#test-sharding">                               `    --shard-count`</a><br />
 <a href="#test-sharding">                               `    --shard-index`</a><br />
+<a href="#shard-planning">                             `    --shard-plan`</a><br />
+<a href="#shard-planning">                             `    --shard-durations`</a><br />
+<a href="#shard-planning">                             `    --shard-default-duration`</a><br />
 <a href=#no-tests-override>                             `    --allow-running-no-tests`</a><br />
 <a href=#output-verbosity>                              `    --verbosity`</a><br />
 
@@ -608,6 +612,32 @@ it is treated as an index of the shard to run._
 
 Sharding is useful when you want to split test execution across multiple
 processes, as is done with the [Bazel test sharding](https://docs.bazel.build/versions/main/test-encyclopedia.html#test-sharding).
+
+
+<a id="shard-planning"></a>
+## Duration-based shard planning
+<pre>--shard-plan, --shard-durations <path to durations file>, --shard-default-duration <duration></pre>
+
+`--shard-plan` switches the test binary into a plan-only sharding mode:
+instead of running any tests, it distributes the tests selected by the
+test spec into `--shard-count` shards and prints out the resulting plan.
+The tests are distributed greedily by their historical duration, so that
+the total duration of each shard is roughly balanced.
+
+The historical durations are read from the file passed to
+`--shard-durations`. The file contains one test per line, each line made
+up of the test's duration followed by whitespace and the test's name,
+e.g. `1.25 My test case`. Empty lines and lines starting with `#` are
+ignored. Tests without an entry in the file (or all tests, if no file is
+given) are assigned the default duration of `1`, which can be changed
+with `--shard-default-duration`.
+
+The resulting plan is deterministic: tests are placed in order of
+decreasing duration into the currently least loaded shard, ties between
+tests are broken by their (stable) name, and ties between shards are
+broken towards the lower shard index. Tests tagged with a
+`[shard-group:<id>]` tag sharing the same `<id>` are guaranteed to be
+placed into the same shard.
 
 
 <a id="no-tests-override"></a>

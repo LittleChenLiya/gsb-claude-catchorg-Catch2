@@ -16,6 +16,7 @@
 #include <catch2/internal/catch_parse_numbers.hpp>
 #include <catch2/internal/catch_reporter_spec_parser.hpp>
 
+#include <cstdlib>
 #include <fstream>
 #include <string>
 
@@ -219,6 +220,19 @@ namespace Catch {
             return ParserResult::ok( ParseResultType::Matched );
         };
 
+        auto const setShardDefaultDuration = [&]( std::string const& duration ) {
+            char* parseEnd = nullptr;
+            auto const parsedDuration = std::strtod( duration.c_str(), &parseEnd );
+            if ( parseEnd != duration.c_str() + duration.size() ||
+                 parsedDuration < 0 ) {
+                return ParserResult::runtimeError(
+                    "Could not parse '" + duration +
+                    "' as shard default duration" );
+            }
+            config.shardDefaultDuration = parsedDuration;
+            return ParserResult::ok( ParseResultType::Matched );
+        };
+
         auto const setSectionFilter = [&]( std::string const& sectionFilter ) {
             config.pathFilters.emplace_back( PathFilter::For::Section, trim(sectionFilter) );
             return ParserResult::ok( ParseResultType::Matched );
@@ -364,6 +378,15 @@ namespace Catch {
             | Opt( setShardIndex, "shard index" )
                 ["--shard-index"]
                 ( "index of the group of tests to execute (see --shard-count)" )
+            | Opt( config.shardPlan )
+                ["--shard-plan"]
+                ( "print the duration-based shard plan instead of running tests" )
+            | Opt( config.shardDurationsFile, "path" )
+                ["--shard-durations"]
+                ( "file with historical test durations used for shard planning" )
+            | Opt( setShardDefaultDuration, "duration" )
+                ["--shard-default-duration"]
+                ( "duration assumed for tests without historical data (default: 1)" )
             | Opt( config.allowZeroTests )
                 ["--allow-running-no-tests"]
                 ( "Treat 'No tests run' as a success" )

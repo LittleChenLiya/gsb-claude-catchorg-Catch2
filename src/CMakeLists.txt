@@ -124,6 +124,7 @@ set(IMPL_HEADERS
   ${SOURCES_DIR}/internal/catch_reusable_string_stream.hpp
   ${SOURCES_DIR}/internal/catch_run_context.hpp
   ${SOURCES_DIR}/internal/catch_section.hpp
+  ${SOURCES_DIR}/internal/catch_shard_plan.hpp
   ${SOURCES_DIR}/internal/catch_sharding.hpp
   ${SOURCES_DIR}/internal/catch_singletons.hpp
   ${SOURCES_DIR}/internal/catch_source_line_info.hpp
@@ -204,6 +205,7 @@ set(IMPL_SOURCES
   ${SOURCES_DIR}/internal/catch_reusable_string_stream.cpp
   ${SOURCES_DIR}/internal/catch_run_context.cpp
   ${SOURCES_DIR}/internal/catch_section.cpp
+  ${SOURCES_DIR}/internal/catch_shard_plan.cpp
   ${SOURCES_DIR}/internal/catch_singletons.cpp
   ${SOURCES_DIR}/internal/catch_source_line_info.cpp
   ${SOURCES_DIR}/internal/catch_startup_exception_registry.cpp
